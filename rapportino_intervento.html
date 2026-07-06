@@ -179,6 +179,7 @@
   .report-text{
     background:#0d1220; border:1px solid var(--navy-border); border-radius:10px;
     padding:12px; font-size:13px; line-height:1.5; white-space:pre-wrap; margin-bottom:8px;
+    color:var(--text); font-family:'DM Sans', sans-serif; resize:vertical;
   }
 </style>
 </head>
@@ -239,18 +240,26 @@
         </select>
       </div>
       <div>
-        <label for="oreLavoro">Ore lavoro</label>
-        <input type="number" id="oreLavoro" step="0.5" min="0" placeholder="es. 2.5">
+        <label for="tipoIntervento">Tipo intervento</label>
+        <select id="tipoIntervento">
+          <option value="">Seleziona</option>
+          <option value="guasto">Guasto / urgente</option>
+          <option value="programmata">Manutenzione programmata</option>
+          <option value="verifica">Verifica / controllo</option>
+        </select>
       </div>
     </div>
 
-    <label for="tipoIntervento">Tipo intervento</label>
-    <select id="tipoIntervento">
-      <option value="">Seleziona</option>
-      <option value="guasto">Guasto / urgente</option>
-      <option value="programmata">Manutenzione programmata</option>
-      <option value="verifica">Verifica / controllo</option>
-    </select>
+    <label>Ore lavoro (calcolate dal timer: Arrivo → Termine attività)</label>
+    <div class="report-text" id="oreLavoroDisplay" style="margin-bottom:0;">— premi Arrivo e Termine attività per calcolarle</div>
+
+    <label style="display:flex; align-items:center; gap:10px; margin-top:12px; cursor:pointer;">
+      <input type="checkbox" id="extraOreCheck" style="width:20px; height:20px; accent-color:var(--accent); margin:0;">
+      <span style="font-size:13px; color:var(--text); font-weight:500;">Aggiungi ore extra (non coperte dal timer)</span>
+    </label>
+    <div id="extraOreWrap" style="display:none; margin-top:8px;">
+      <input type="number" id="oreExtra" min="0" step="0.25" placeholder="es. 0.5">
+    </div>
   </div>
 
   <!-- 2. Trasferta e urgenza -->
@@ -336,13 +345,19 @@
   <div class="card" id="risultatoCard" style="display:none;">
     <h2>📄 Rapportino generato</h2>
 
-    <label>Per il cliente</label>
-    <div class="report-text" id="reportClienteText"></div>
-    <button class="btn-sec btn-copia" data-target="reportClienteText">Copia testo cliente</button>
+    <label>Per il cliente <span style="color:var(--text-dim); font-weight:400;">(modificabile)</span></label>
+    <textarea class="report-text" id="reportClienteText" style="min-height:130px; width:100%;"></textarea>
+    <div style="display:flex; gap:8px;">
+      <button class="btn-sec btn-copia" data-target="reportClienteText" style="flex:1;">Copia testo cliente</button>
+      <button class="btn-sec btn-invia" data-target="reportClienteText" data-dest="cliente" style="flex:1;">Invia email cliente</button>
+    </div>
 
-    <label style="margin-top:16px;">Per il coordinatore</label>
-    <div class="report-text" id="reportInternoText"></div>
-    <button class="btn-sec btn-copia" data-target="reportInternoText">Copia testo interno</button>
+    <label style="margin-top:16px;">Per il coordinatore <span style="color:var(--text-dim); font-weight:400;">(modificabile)</span></label>
+    <textarea class="report-text" id="reportInternoText" style="min-height:130px; width:100%;"></textarea>
+    <div style="display:flex; gap:8px;">
+      <button class="btn-sec btn-copia" data-target="reportInternoText" style="flex:1;">Copia testo interno</button>
+      <button class="btn-sec btn-invia" data-target="reportInternoText" data-dest="coordinatore" style="flex:1;">Invia a coordinatore</button>
+    </div>
 
     <button class="btn-add" id="btnRiprovaGenerazione" style="display:none; margin-top:14px;">Riprova generazione</button>
   </div>
@@ -363,7 +378,9 @@
 // {
 //   id: "RAP-20260706-001",
 //   cliente, citta, macchinario, tecnico, dataIntervento,
-//   oreLavoro, tipoIntervento,
+//   oreLavoro: totale (auto + extra), oreLavoroAuto: calcolato dal timer,
+//   extraOreAttiva: bool, oreExtra: numero aggiunto manualmente,
+//   tipoIntervento,
 //   km: numero,                    // sede -> cliente, tariffa Euro/km applicata altrove
 //   tempoAndata: minuti, tempoRitorno: minuti,
 //   oraIntervento: "HH:MM",
@@ -398,7 +415,7 @@ function nuovoRapportino(){
   return {
     id: nuovoId(),
     cliente:"", citta:"", macchinario:"", tecnico:"", dataIntervento:"",
-    oreLavoro:null, tipoIntervento:"",
+    oreLavoro:0, oreLavoroAuto:0, extraOreAttiva:false, oreExtra:0, tipoIntervento:"",
     km:null, tempoAndata:null, tempoRitorno:null,
     oraIntervento:"", urgenza:false, dirittoChiamata:null,
     orarioArrivo:null, orarioFineLavoro:null, orarioTermineAttivita:null,
@@ -436,7 +453,7 @@ document.getElementById("rapportinoId").textContent = current.id;
 aggiornaStatoPill();
 
 // campi semplici
-["cliente","citta","macchinario","tecnico","dataIntervento","oreLavoro","tipoIntervento","noteLibere","km","tempoAndata","tempoRitorno"].forEach(id => {
+["cliente","citta","macchinario","tecnico","dataIntervento","tipoIntervento","noteLibere","km","tempoAndata","tempoRitorno"].forEach(id => {
   const el = document.getElementById(id);
   el.addEventListener("input", () => { current[id] = el.value; salva(); });
   el.addEventListener("change", () => { current[id] = el.value; salva(); });
@@ -454,6 +471,40 @@ function aggiornaTempoTotale(){
 }
 document.getElementById("tempoAndata").addEventListener("input", aggiornaTempoTotale);
 document.getElementById("tempoRitorno").addEventListener("input", aggiornaTempoTotale);
+
+// ============================================================
+// ORE LAVORO — calcolate dal timer (Arrivo -> Termine attività) + eventuali ore extra manuali
+// ============================================================
+function ricalcolaOreLavoro(){
+  let auto = 0;
+  if (current.orarioArrivo && current.orarioTermineAttivita){
+    const ms = new Date(current.orarioTermineAttivita) - new Date(current.orarioArrivo);
+    auto = Math.round((ms / 3600000) * 4) / 4;
+  }
+  current.oreLavoroAuto = auto;
+  const extra = current.extraOreAttiva ? (parseFloat(current.oreExtra) || 0) : 0;
+  current.oreLavoro = Math.round((auto + extra) * 4) / 4;
+
+  const display = document.getElementById("oreLavoroDisplay");
+  if (!current.orarioArrivo || !current.orarioTermineAttivita){
+    display.textContent = "— premi Arrivo e Termine attività per calcolarle";
+  } else if (extra > 0){
+    display.textContent = `${auto} h (auto) + ${extra} h extra = ${current.oreLavoro} h totali`;
+  } else {
+    display.textContent = `${auto} h totali`;
+  }
+}
+
+document.getElementById("extraOreCheck").addEventListener("change", e => {
+  current.extraOreAttiva = e.target.checked;
+  document.getElementById("extraOreWrap").style.display = e.target.checked ? "block" : "none";
+  ricalcolaOreLavoro(); salva();
+});
+document.getElementById("oreExtra").addEventListener("input", e => {
+  current.oreExtra = e.target.value;
+  ricalcolaOreLavoro(); salva();
+});
+ricalcolaOreLavoro();
 
 // ============================================================
 // URGENZA — diritto di chiamata in base alla fascia oraria
@@ -738,15 +789,16 @@ document.getElementById("btnTimer").addEventListener("click", () => {
 
   } else if (stato === "in_corso"){
     current.orarioFineLavoro = ora;
-    // auto-calcola ore lavoro (arrotondato a 0.25h) e precompila il campo, resta modificabile a mano
-    const oreLavoroMs = new Date(current.orarioFineLavoro) - new Date(current.orarioArrivo);
-    const oreLavoroCalcolate = Math.round((oreLavoroMs / 3600000) * 4) / 4;
-    current.oreLavoro = oreLavoroCalcolate;
-    document.getElementById("oreLavoro").value = oreLavoroCalcolate;
+    // niente calcolo qui: le ore lavoro fatturabili includono anche il tempo di compilazione,
+    // quindi si calcolano solo alla pressione di "Termine attività"
 
   } else if (stato === "fine_lavoro"){
     current.orarioTermineAttivita = ora;
+    ricalcolaOreLavoro();
+    salva();
+    renderTimer();
     generaRapportino(); // il rapportino si genera SOLO a questo punto
+    return;
   }
   salva();
   renderTimer();
@@ -757,11 +809,10 @@ document.getElementById("btnAnnullaTimer").addEventListener("click", () => {
     current.orarioTermineAttivita = null;
   } else if (current.orarioFineLavoro){
     current.orarioFineLavoro = null;
-    current.oreLavoro = null;
-    document.getElementById("oreLavoro").value = "";
   } else if (current.orarioArrivo){
     current.orarioArrivo = null;
   }
+  ricalcolaOreLavoro();
   salva();
   renderTimer();
   aggiornaStatoPill();
@@ -829,7 +880,9 @@ function costruisciDatiPerAI(){
     tecnico: current.tecnico,
     dataIntervento: current.dataIntervento,
     tipoIntervento: current.tipoIntervento,
-    oreLavoro: current.oreLavoro,
+    oreLavoroTotale: current.oreLavoro,
+    oreLavoroAuto: current.oreLavoroAuto,
+    oreExtra: current.extraOreAttiva ? current.oreExtra : 0,
     km: current.km,
     tempoAndataMin: current.tempoAndata,
     tempoRitornoMin: current.tempoRitorno,
@@ -873,8 +926,8 @@ async function generaRapportino(){
 
   card.style.display = "block";
   btnRiprova.style.display = "none";
-  testoCliente.textContent = "Generazione in corso...";
-  testoInterno.textContent = "Generazione in corso...";
+  testoCliente.value = "Generazione in corso...";
+  testoInterno.value = "Generazione in corso...";
   card.scrollIntoView({ behavior:"smooth" });
 
   try{
@@ -882,12 +935,12 @@ async function generaRapportino(){
     current.reportCliente = risultato.report_cliente || "";
     current.reportInterno = risultato.report_interno || "";
     current.stato = "generato";
-    testoCliente.textContent = current.reportCliente;
-    testoInterno.textContent = current.reportInterno;
+    testoCliente.value = current.reportCliente;
+    testoInterno.value = current.reportInterno;
   } catch(err){
     console.error("Errore generazione rapportino:", err);
-    testoCliente.textContent = "Errore nella generazione: " + err.message;
-    testoInterno.textContent = "Errore nella generazione: " + err.message;
+    testoCliente.value = "Errore nella generazione: " + err.message;
+    testoInterno.value = "Errore nella generazione: " + err.message;
     btnRiprova.style.display = "block";
   }
   aggiornaStatoPill();
@@ -896,14 +949,27 @@ async function generaRapportino(){
 
 document.getElementById("btnRiprovaGenerazione").addEventListener("click", generaRapportino);
 
+// testi modificabili: salvo in current appena il tecnico li modifica a mano
+document.getElementById("reportClienteText").addEventListener("input", e => { current.reportCliente = e.target.value; salva(); });
+document.getElementById("reportInternoText").addEventListener("input", e => { current.reportInterno = e.target.value; salva(); });
+
 document.querySelectorAll(".btn-copia").forEach(btn => {
   btn.addEventListener("click", () => {
-    const testo = document.getElementById(btn.dataset.target).textContent;
+    const testo = document.getElementById(btn.dataset.target).value;
     navigator.clipboard.writeText(testo).then(() => {
       const originale = btn.textContent;
       btn.textContent = "Copiato ✓";
       setTimeout(() => btn.textContent = originale, 1500);
     });
+  });
+});
+
+// invio email — stub: in questa fase mockup non è collegato a nessun servizio reale
+document.querySelectorAll(".btn-invia").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const dest = btn.dataset.dest;
+    const destinatario = dest === "cliente" ? (current.cliente || "cliente") : "Giulia Trentini (coordinatrice)";
+    alert(`Mockup: qui partirebbe l'invio email a ${destinatario}.\nNon collegato a un servizio reale in questa fase.`);
   });
 });
 
