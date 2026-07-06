@@ -228,6 +228,9 @@
     <label for="macchinario">Macchinario / impianto</label>
     <input type="text" id="macchinario" placeholder="es. Compressore a vite 22kW">
 
+    <label for="oreMacchina">Ore macchina (contaore)</label>
+    <input type="number" id="oreMacchina" min="0" step="1" placeholder="es. 12480">
+
     <div class="row2">
       <div>
         <label for="tecnico">Tecnico</label>
@@ -273,7 +276,12 @@
       </div>
       <div>
         <label for="oraIntervento">Ora inizio intervento</label>
-        <input type="time" id="oraIntervento">
+        <input type="time" id="oraIntervento" disabled placeholder="— da Arrivo">
+        <label style="display:flex; align-items:center; gap:8px; margin-top:8px; cursor:pointer;">
+          <input type="checkbox" id="modificaOraCheck" style="width:18px; height:18px; accent-color:var(--accent); margin:0;">
+          <span style="font-size:11px; color:var(--text-dim); font-weight:400;">Modifica manuale (verrà annotato)</span>
+        </label>
+        <div class="firma-hint" id="oraInterventoNota" style="display:none; color:var(--warn);"></div>
       </div>
     </div>
 
@@ -383,7 +391,9 @@
 //   tipoIntervento,
 //   km: numero,                    // sede -> cliente, tariffa Euro/km applicata altrove
 //   tempoAndata: minuti, tempoRitorno: minuti,
-//   oraIntervento: "HH:MM",
+//   oraIntervento: "HH:MM" (valore effettivo usato),
+//   oraInterventoAuto: "HH:MM" | null (rilevato da Arrivo, riferimento),
+//   oraInterventoManualeAttiva: bool (flag modifica manuale),
 //   urgenza: bool,
 //   dirittoChiamata: { importo:number, fascia:"diurna"|"notturna" } | null,
 //   orarioArrivo: ISO string | null,          // premuto "Arrivo dal cliente"
@@ -414,10 +424,10 @@ function nuovoId(){
 function nuovoRapportino(){
   return {
     id: nuovoId(),
-    cliente:"", citta:"", macchinario:"", tecnico:"", dataIntervento:"",
+    cliente:"", citta:"", macchinario:"", oreMacchina:"", tecnico:"", dataIntervento:"",
     oreLavoro:0, oreLavoroAuto:0, extraOreAttiva:false, oreExtra:0, tipoIntervento:"",
     km:null, tempoAndata:null, tempoRitorno:null,
-    oraIntervento:"", urgenza:false, dirittoChiamata:null,
+    oraIntervento:"", oraInterventoAuto:null, oraInterventoManualeAttiva:false, urgenza:false, dirittoChiamata:null,
     orarioArrivo:null, orarioFineLavoro:null, orarioTermineAttivita:null,
     checklist:[{label:"", fatto:false, note:""}],
     ricambi:[],
@@ -453,7 +463,7 @@ document.getElementById("rapportinoId").textContent = current.id;
 aggiornaStatoPill();
 
 // campi semplici
-["cliente","citta","macchinario","tecnico","dataIntervento","tipoIntervento","noteLibere","km","tempoAndata","tempoRitorno"].forEach(id => {
+["cliente","citta","macchinario","oreMacchina","tecnico","dataIntervento","tipoIntervento","noteLibere","km","tempoAndata","tempoRitorno"].forEach(id => {
   const el = document.getElementById(id);
   el.addEventListener("input", () => { current[id] = el.value; salva(); });
   el.addEventListener("change", () => { current[id] = el.value; salva(); });
@@ -474,16 +484,28 @@ document.getElementById("tempoRitorno").addEventListener("input", aggiornaTempoT
 
 // ============================================================
 // ORE LAVORO — calcolate dal timer (Arrivo -> Termine attività) + eventuali ore extra manuali
+// Regola arrotondamento: minimo 30 min (anche per 1 minuto lavorato).
+// Entro i 30 min dell'ora in corso -> arrotonda a mezz'ora; oltre i 31 min -> arrotonda all'ora intera.
 // ============================================================
+function arrotondaOreLavoro(ms){
+  const minutiTotali = ms / 60000;
+  if (minutiTotali <= 30) return 0.5;
+  const oreIntere = Math.floor(minutiTotali / 60);
+  const resto = minutiTotali % 60;
+  if (resto === 0) return oreIntere;
+  if (resto <= 30) return oreIntere + 0.5;
+  return oreIntere + 1;
+}
+
 function ricalcolaOreLavoro(){
   let auto = 0;
   if (current.orarioArrivo && current.orarioTermineAttivita){
     const ms = new Date(current.orarioTermineAttivita) - new Date(current.orarioArrivo);
-    auto = Math.round((ms / 3600000) * 4) / 4;
+    auto = arrotondaOreLavoro(ms);
   }
   current.oreLavoroAuto = auto;
   const extra = current.extraOreAttiva ? (parseFloat(current.oreExtra) || 0) : 0;
-  current.oreLavoro = Math.round((auto + extra) * 4) / 4;
+  current.oreLavoro = auto + extra;
 
   const display = document.getElementById("oreLavoroDisplay");
   if (!current.orarioArrivo || !current.orarioTermineAttivita){
@@ -546,14 +568,26 @@ function aggiornaDirittoChiamata(){
 }
 
 const oraInterventoEl = document.getElementById("oraIntervento");
-// default: ora corrente al primo caricamento
-const oraCorrente = new Date();
-oraInterventoEl.value = String(oraCorrente.getHours()).padStart(2,"0") + ":" + String(oraCorrente.getMinutes()).padStart(2,"0");
-current.oraIntervento = oraInterventoEl.value;
+const modificaOraCheck = document.getElementById("modificaOraCheck");
+const oraInterventoNotaEl = document.getElementById("oraInterventoNota");
+
+function aggiornaNotaOra(){
+  if (current.oraInterventoManualeAttiva && current.oraInterventoAuto && current.oraIntervento !== current.oraInterventoAuto){
+    oraInterventoNotaEl.style.display = "block";
+    oraInterventoNotaEl.textContent = `⚠ Modificata a mano — orario rilevato da Arrivo: ${current.oraInterventoAuto}`;
+  } else {
+    oraInterventoNotaEl.style.display = "none";
+  }
+}
 
 oraInterventoEl.addEventListener("input", () => {
   current.oraIntervento = oraInterventoEl.value;
-  aggiornaDirittoChiamata(); salva();
+  aggiornaNotaOra(); aggiornaDirittoChiamata(); salva();
+});
+modificaOraCheck.addEventListener("change", e => {
+  current.oraInterventoManualeAttiva = e.target.checked;
+  oraInterventoEl.disabled = !e.target.checked;
+  aggiornaNotaOra(); salva();
 });
 document.getElementById("urgenza").addEventListener("change", e => {
   current.urgenza = e.target.checked;
@@ -786,6 +820,13 @@ document.getElementById("btnTimer").addEventListener("click", () => {
 
   if (stato === "non_iniziato"){
     current.orarioArrivo = ora;
+    const t = new Date(current.orarioArrivo);
+    current.oraInterventoAuto = String(t.getHours()).padStart(2,"0") + ":" + String(t.getMinutes()).padStart(2,"0");
+    if (!current.oraInterventoManualeAttiva){
+      current.oraIntervento = current.oraInterventoAuto;
+      document.getElementById("oraIntervento").value = current.oraIntervento;
+    }
+    aggiornaDirittoChiamata();
 
   } else if (stato === "in_corso"){
     current.orarioFineLavoro = ora;
@@ -811,6 +852,12 @@ document.getElementById("btnAnnullaTimer").addEventListener("click", () => {
     current.orarioFineLavoro = null;
   } else if (current.orarioArrivo){
     current.orarioArrivo = null;
+    current.oraInterventoAuto = null;
+    if (!current.oraInterventoManualeAttiva){
+      current.oraIntervento = "";
+      document.getElementById("oraIntervento").value = "";
+    }
+    aggiornaDirittoChiamata();
   }
   ricalcolaOreLavoro();
   salva();
@@ -877,6 +924,7 @@ function costruisciDatiPerAI(){
     cliente: current.cliente,
     citta: current.citta,
     macchinario: current.macchinario,
+    oreMacchina: current.oreMacchina,
     tecnico: current.tecnico,
     dataIntervento: current.dataIntervento,
     tipoIntervento: current.tipoIntervento,
@@ -888,6 +936,7 @@ function costruisciDatiPerAI(){
     tempoRitornoMin: current.tempoRitorno,
     urgenza: current.urgenza,
     dirittoChiamata: current.dirittoChiamata,
+    oraInterventoModificataManualmente: !!(current.oraInterventoManualeAttiva && current.oraInterventoAuto && current.oraIntervento !== current.oraInterventoAuto),
     // filtro le voci vuote per non dare all'AI spazio per inventare contenuto
     checklist: current.checklist.filter(v => v.label && v.label.trim() !== ""),
     ricambi: current.ricambi.filter(r => r.nome && r.nome.trim() !== ""),
