@@ -716,6 +716,18 @@ renderFoto();
 const canvas = document.getElementById("firmaCanvas");
 const ctx = canvas.getContext("2d");
 function resizeCanvas(){
+  // C2 — guardia: se il canvas non è ancora nel layout non azzerarne il contenuto
+  if (canvas.offsetWidth === 0) return;
+
+  // C1 — salva snapshot del disegno esistente prima di ridimensionare
+  // current.firma è null/""/ undefined finché l'utente non ha ancora firmato:
+  // il blocco è falsy in quei casi, quindi drawImage non viene mai chiamato
+  let snapshot = null;
+  if (current.firma) {
+    snapshot = new Image();
+    snapshot.src = current.firma;
+  }
+
   const ratio = window.devicePixelRatio || 1;
   canvas.width = canvas.offsetWidth * ratio;
   canvas.height = canvas.offsetHeight * ratio;
@@ -724,8 +736,25 @@ function resizeCanvas(){
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
+
+  // C1 — ripristina il disegno sul canvas ridimensionato
+  // I data-URL sono già in memoria: .complete è true nella quasi totalità dei casi;
+  // il ramo onload copre il caso (teorico) in cui l'immagine non sia ancora decodificata
+  if (snapshot) {
+    if (snapshot.complete) {
+      ctx.drawImage(snapshot, 0, 0, canvas.offsetWidth, canvas.offsetHeight);
+    } else {
+      snapshot.onload = () => ctx.drawImage(snapshot, 0, 0, canvas.offsetWidth, canvas.offsetHeight);
+    }
+  }
 }
 window.addEventListener("resize", resizeCanvas);
+// C1 — su mobile, visualViewport si ridimensiona quando la tastiera virtuale
+// appare o scompare; window "resize" da solo non scatta in quel caso.
+// Fallback silenzioso per browser senza supporto (Safari iOS < 13, ecc.)
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", resizeCanvas);
+}
 resizeCanvas();
 
 let disegnando = false;
@@ -740,7 +769,10 @@ function end(){ if(!disegnando) return; disegnando = false; current.firma = canv
 
 canvas.addEventListener("mousedown", start);
 canvas.addEventListener("mousemove", move);
-canvas.addEventListener("mouseup", end);
+// C3 — mouseup ascoltato su document invece che solo sul canvas:
+// se l'utente trascina fuori dal bordo e rilascia, "disegnando" viene
+// comunque abbassato a false, evitando linee indesiderate al rientro
+document.addEventListener("mouseup", end);
 canvas.addEventListener("touchstart", start, {passive:false});
 canvas.addEventListener("touchmove", move, {passive:false});
 canvas.addEventListener("touchend", end);
