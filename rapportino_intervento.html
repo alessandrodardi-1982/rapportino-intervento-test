@@ -283,7 +283,7 @@
           <input type="checkbox" id="modificaOraCheck" style="width:18px; height:18px; accent-color:var(--accent); margin:0;">
           <span style="font-size:11px; color:var(--text-dim); font-weight:400;">Modifica manuale (verrà annotato)</span>
         </label>
-        <div class="firma-hint" id="oraInterventoNota" style="display:none; color:var(--warn);"></div>
+        <div class="firma-hint" id="oraInterventoNota" style="display:none;"></div>
       </div>
     </div>
 
@@ -357,19 +357,19 @@
 
     <label>Per il cliente <span style="color:var(--text-dim); font-weight:400;">(modificabile)</span></label>
     <textarea class="report-text" id="reportClienteText" style="min-height:130px; width:100%;"></textarea>
-    <div style="display:flex; gap:8px;">
-      <button class="btn-sec btn-copia" data-target="reportClienteText" style="flex:1;">Copia testo cliente</button>
-      <button class="btn-sec btn-invia" data-target="reportClienteText" data-dest="cliente" style="flex:1;">Invia email cliente</button>
-    </div>
+    <button class="btn-sec btn-invia" data-target="reportClienteText" data-dest="cliente" style="width:100%;">Invia email cliente</button>
 
     <label style="margin-top:16px;">Per il coordinatore <span style="color:var(--text-dim); font-weight:400;">(modificabile)</span></label>
     <textarea class="report-text" id="reportInternoText" style="min-height:130px; width:100%;"></textarea>
-    <div style="display:flex; gap:8px;">
-      <button class="btn-sec btn-copia" data-target="reportInternoText" style="flex:1;">Copia testo interno</button>
-      <button class="btn-sec btn-invia" data-target="reportInternoText" data-dest="coordinatore" style="flex:1;">Invia a coordinatore</button>
-    </div>
+    <button class="btn-sec btn-invia" data-target="reportInternoText" data-dest="coordinatore" style="width:100%;">Invia a coordinatore</button>
 
     <button class="btn-add" id="btnRiprovaGenerazione" style="display:none; margin-top:14px;">Riprova generazione</button>
+
+    <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--navy-border);">
+      <label>Comunicazione amministrazione</label>
+      <div class="firma-hint" style="margin-bottom:8px;">Invia il riepilogo dati per la fatturazione (simulazione, nessun invio reale)</div>
+      <button class="btn-sec" id="btnInviaFatturazione" style="width:100%;">Invia dati fatturazione</button>
+    </div>
   </div>
 
 </main>
@@ -492,11 +492,7 @@ document.getElementById("tempoRitorno").addEventListener("input", aggiornaTempoT
 function arrotondaOreLavoro(ms){
   const minutiTotali = ms / 60000;
   if (minutiTotali <= 30) return 0.5;
-  const oreIntere = Math.floor(minutiTotali / 60);
-  const resto = minutiTotali % 60;
-  if (resto === 0) return oreIntere;
-  if (resto <= 30) return oreIntere + 0.5;
-  return oreIntere + 1;
+  return Math.ceil(minutiTotali / 60);
 }
 
 function ricalcolaOreLavoro(){
@@ -574,11 +570,20 @@ const modificaOraCheck = document.getElementById("modificaOraCheck");
 const oraInterventoNotaEl = document.getElementById("oraInterventoNota");
 
 function aggiornaNotaOra(){
-  if (current.oraInterventoManualeAttiva && current.oraInterventoAuto && current.oraIntervento !== current.oraInterventoAuto){
-    oraInterventoNotaEl.style.display = "block";
-    oraInterventoNotaEl.textContent = `⚠ Modificata a mano — orario rilevato da Arrivo: ${current.oraInterventoAuto}`;
-  } else {
+  // Nota nascosta fino a quando l'Arrivo non viene registrato dal timer
+  if (!current.oraInterventoAuto) {
     oraInterventoNotaEl.style.display = "none";
+    return;
+  }
+  oraInterventoNotaEl.style.display = "block";
+  if (current.oraInterventoManualeAttiva && current.oraIntervento !== current.oraInterventoAuto) {
+    // Valore corretto manualmente: avviso con riferimento all'orario originale
+    oraInterventoNotaEl.style.color = "var(--warn)";
+    oraInterventoNotaEl.textContent = `⚠ Modificato manualmente — rilevato automaticamente: ${current.oraInterventoAuto}`;
+  } else {
+    // Valore auto-rilevato (default o checkbox non ancora toccato): nota neutra
+    oraInterventoNotaEl.style.color = "var(--text-dim)";
+    oraInterventoNotaEl.textContent = `🕐 Rilevato automaticamente: ${current.oraInterventoAuto}`;
   }
 }
 
@@ -589,6 +594,11 @@ oraInterventoEl.addEventListener("input", () => {
 modificaOraCheck.addEventListener("change", e => {
   current.oraInterventoManualeAttiva = e.target.checked;
   oraInterventoEl.disabled = !e.target.checked;
+  if (!e.target.checked && current.oraInterventoAuto) {
+    // Checkbox despuntato: ripristina il valore auto-rilevato, non lasciare la modifica manuale
+    current.oraIntervento = current.oraInterventoAuto;
+    oraInterventoEl.value = current.oraInterventoAuto;
+  }
   aggiornaNotaOra(); salva();
 });
 document.getElementById("urgenza").addEventListener("change", e => {
@@ -715,13 +725,15 @@ renderFoto();
 // ============================================================
 const canvas = document.getElementById("firmaCanvas");
 const ctx = canvas.getContext("2d");
-function resizeCanvas(){
+// _doResizeCanvas: implementazione effettiva — eseguita immediatamente all'init
+// e dalla versione debounced per gli eventi resize successivi.
+function _doResizeCanvas(){
   // C2 — guardia: se il canvas non è ancora nel layout non azzerarne il contenuto
   if (canvas.offsetWidth === 0) return;
 
   // C1 — salva snapshot del disegno esistente prima di ridimensionare
-  // current.firma è null/""/ undefined finché l'utente non ha ancora firmato:
-  // il blocco è falsy in quei casi, quindi drawImage non viene mai chiamato
+  // current.firma è null/""/undefined finché l'utente non ha ancora firmato:
+  // il blocco è falsy in quei casi, drawImage non viene mai chiamato
   let snapshot = null;
   if (current.firma) {
     snapshot = new Image();
@@ -737,17 +749,27 @@ function resizeCanvas(){
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
-  // C1 — ripristina il disegno sul canvas ridimensionato
-  // I data-URL sono già in memoria: .complete è true nella quasi totalità dei casi;
-  // il ramo onload copre il caso (teorico) in cui l'immagine non sia ancora decodificata
+  // C1 — ripristina il disegno sul canvas ridimensionato.
+  // requestAnimationFrame garantisce che scale() e dimensioni CSS siano
+  // già applicate dal browser prima del drawImage, evitando race condition
+  // durante scroll animati (scrollIntoView in generaRapportino, reflow rapidi).
   if (snapshot) {
-    if (snapshot.complete) {
-      ctx.drawImage(snapshot, 0, 0, canvas.offsetWidth, canvas.offsetHeight);
-    } else {
-      snapshot.onload = () => ctx.drawImage(snapshot, 0, 0, canvas.offsetWidth, canvas.offsetHeight);
-    }
+    const restore = () => ctx.drawImage(snapshot, 0, 0, canvas.offsetWidth, canvas.offsetHeight);
+    if (snapshot.complete) { requestAnimationFrame(restore); }
+    else { snapshot.onload = () => requestAnimationFrame(restore); }
   }
 }
+
+// P3 — debounce: collassa le chiamate ravvicinate (scroll smooth, reflow da
+// display:none→block di risultatoCard) in una sola, 120 ms dopo l'ultima,
+// quando layout e dimensioni CSS sono già stabili.
+// Usato SOLO per gli eventi post-init; all'init si chiama _doResizeCanvas direttamente.
+let _resizeTimer = null;
+function resizeCanvas(){
+  clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(_doResizeCanvas, 120);
+}
+
 window.addEventListener("resize", resizeCanvas);
 // C1 — su mobile, visualViewport si ridimensiona quando la tastiera virtuale
 // appare o scompare; window "resize" da solo non scatta in quel caso.
@@ -755,7 +777,9 @@ window.addEventListener("resize", resizeCanvas);
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", resizeCanvas);
 }
-resizeCanvas();
+// Chiamata diretta (no debounce) all'init: il canvas è pronto immediatamente,
+// senza i 120 ms di attesa — il primo tratto di disegno funziona al caricamento.
+_doResizeCanvas();
 
 let disegnando = false;
 function pos(e){
@@ -861,6 +885,7 @@ document.getElementById("btnTimer").addEventListener("click", () => {
       document.getElementById("oraIntervento").value = current.oraIntervento;
     }
     aggiornaDirittoChiamata();
+    aggiornaNotaOra(); // aggiorna la nota fissa con l'orario auto-rilevato
 
   } else if (stato === "in_corso"){
     current.orarioFineLavoro = ora;
@@ -892,6 +917,7 @@ document.getElementById("btnAnnullaTimer").addEventListener("click", () => {
       document.getElementById("oraIntervento").value = "";
     }
     aggiornaDirittoChiamata();
+    aggiornaNotaOra(); // nasconde la nota quando l'Arrivo viene annullato
   }
   ricalcolaOreLavoro();
   salva();
@@ -1036,24 +1062,45 @@ document.getElementById("btnRiprovaGenerazione").addEventListener("click", gener
 document.getElementById("reportClienteText").addEventListener("input", e => { current.reportCliente = e.target.value; salva(); });
 document.getElementById("reportInternoText").addEventListener("input", e => { current.reportInterno = e.target.value; salva(); });
 
-document.querySelectorAll(".btn-copia").forEach(btn => {
-  btn.addEventListener("click", () => {
-    const testo = document.getElementById(btn.dataset.target).value;
-    navigator.clipboard.writeText(testo).then(() => {
-      const originale = btn.textContent;
-      btn.textContent = "Copiato ✓";
-      setTimeout(() => btn.textContent = originale, 1500);
-    });
+// Toast di conferma mock — nessun invio reale, solo feedback visivo (sostituisce alert())
+function mostraToast(testo){
+  let toast = document.getElementById("mockToast");
+  if (!toast){
+    toast = document.createElement("div");
+    toast.id = "mockToast";
+    toast.style.cssText = "position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px); "
+      + "background:#16a34a; color:#fff; padding:12px 20px; border-radius:10px; font-size:14px; font-weight:600; "
+      + "box-shadow:0 8px 24px rgba(0,0,0,.35); z-index:9999; opacity:0; transition:opacity .25s, transform .25s; "
+      + "max-width:90vw; text-align:center;";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = testo;
+  requestAnimationFrame(() => {
+    toast.style.opacity = "1";
+    toast.style.transform = "translateX(-50%) translateY(0)";
   });
-});
+  clearTimeout(toast._hideTimer);
+  toast._hideTimer = setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateX(-50%) translateY(20px)";
+  }, 3000);
+}
 
-// invio email — stub: in questa fase mockup non è collegato a nessun servizio reale
+// invio email — mock: nessun servizio reale collegato, solo conferma visiva (simulazione portfolio)
 document.querySelectorAll(".btn-invia").forEach(btn => {
   btn.addEventListener("click", () => {
     const dest = btn.dataset.dest;
-    const destinatario = dest === "cliente" ? (current.cliente || "cliente") : "Giulia Trentini (coordinatrice)";
-    alert(`Mockup: qui partirebbe l'invio email a ${destinatario}.\nNon collegato a un servizio reale in questa fase.`);
+    const destinatario = dest === "cliente" ? (current.cliente || "cliente") : "coordinatore";
+    mostraToast(`✓ Email inviata a ${destinatario} (simulazione portfolio)`);
   });
+});
+
+document.getElementById("btnInviaFatturazione").addEventListener("click", () => {
+  const oreFatturate = current.oreLavoro || 0;
+  const diritto = current.dirittoChiamata ? `${current.dirittoChiamata.importo}€ (${current.dirittoChiamata.fascia})` : "nessuno";
+  const riepilogo = `Cliente: ${current.cliente || "—"}\nOre fatturate: ${oreFatturate} h\nDiritto di chiamata: ${diritto}`;
+  console.log("Riepilogo fatturazione (mock):\n" + riepilogo);
+  mostraToast("✓ Dati inviati ad amministrazione (simulazione portfolio)");
 });
 
 document.getElementById("btnCoda").addEventListener("click", () => {
